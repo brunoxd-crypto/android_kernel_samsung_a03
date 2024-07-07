@@ -2,14 +2,12 @@
 
 #
 # Rissu Projects (C) 2024
+# Kernel build script for A03
 #
 
-#
-# TODO: Tidy up this scripts
-# TODO: Add support for Local build too.
-# I guess this is not possible on Local build. since half
-# of it handled by CI.
-#
+# TODO: 
+# Fix CI upload and compiling
+# Split it too.
 
 # declare static variable
 RSUDIR="$(pwd)/Rissu"
@@ -20,12 +18,8 @@ MIN_CORES="2"
 MK_SC="mk_cmd.sh"
 MGSKBT=$RSUDIR/bin/mgskbt
 OUTDIR="$(pwd)/out"
-if [[ $GIT_CI_RELEASE_TYPE = "release" ]]; then
-	DEFCONFIG="rsuntk_defconfig"
-	sed -i 's/CONFIG_LOCALVERSION=\"\"/CONFIG_LOCALVERSION="-Scorpio-v`echo $GIT_KERNEL_REVNUM`"/' "$(pwd)/arch/arm64/configs/$DEFCONFIG"
-elif [[ $GIT_CI_RELEASE_TYPE = "testing" ]]; then
-	DEFCONFIG="rsuci_defconfig"
-fi
+DEFCONFIG="rsuntk_defconfig"
+
 # declare global variable
 export CROSS_COMPILE=$(pwd)/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-
 export ARCH=arm64
@@ -75,16 +69,6 @@ printf "#! /usr/bin/env bash
 make -C $(pwd) O=$(pwd)/out BSP_BUILD_DT_OVERLAY=y `echo $FLAGS` CC=clang LD=ld.lld ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- `echo $DEFCONFIG`
 make -C $(pwd) O=$(pwd)/out BSP_BUILD_DT_OVERLAY=y `echo $FLAGS` CC=clang LD=ld.lld ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- -j`echo $TC`" > $MK_SC
 
-if [[ $GIT_KSU_STATE = 'true' ]] && [[ $GIT_CI_RELEASE_TYPE = "release" ]]; then
-	FMT="Scorpio-v`echo $GIT_KERNEL_REVNUM`-KSU-`echo $KSU_VERSION_NUMBER`-`echo $KSU_VERSION_TAGS`"
-elif [[ $GIT_KSU_STATE = 'false' ]] && [[ $GIT_CI_RELEASE_TYPE = "release" ]]; then
-	FMT="Scorpio-v`echo $GIT_KERNEL_REVNUM`-NoKSU"
-elif [[ $GIT_KSU_STATE = 'true' ]] && [[ $GIT_CI_RELEASE_TYPE = "testing" ]]; then
-	FMT="Scorpio-CI-KSU-`echo $KSU_VERSION_NUMBER`-`echo $KSU_VERSION_TAGS`"
-elif [[ $GIT_KSU_STATE = 'false' ]] && [[ $GIT_CI_RELEASE_TYPE = "testing" ]]; then
-	FMT="Scorpio-CI-NoKSU"
-fi
-
 BOOT_FMT="`echo $FMT`.img"
 LZ4_FMT="`echo $BOOT_FMT`.lz4"
 
@@ -92,14 +76,25 @@ echo $FMT > $(pwd)/tmp_gitout_name.txt
 
 mk_bootimg() { ## Stolen and simplified from rsuntk_v4.19.150 :D
 	cd $RSUDIR
+ 	echo "[Rissu Boot.img Patcher]"
 	tar -xvf a03_s6.tar.xz
+ 	echo "- Patching boot.img with new kernel"
 	$MGSKBT unpack boot.img
 	rm $RSUDIR/kernel -f
 	cp ../out/arch/arm64/boot/Image $RSUDIR/kernel
 	$MGSKBT repack boot.img $BOOT_FMT
+ 	echo "- Repacking"
+  	
+   	if [ -f $RSUDIR/$BOOT_FMT ]; then
+   		echo "- Done!"
+     	else
+      		echo "! Failed"
+	fi
+ 
 	lz4 -B6 --content-size $BOOT_FMT $LZ4_FMT
 	rm $RSUDIR/kernel && rm $RSUDIR/ramdisk.cpio && rm $RSUDIR/dtb && rm $RSUDIR/boot.img
 }
+
 upload_to_tg() {
 	# Thanks to ItzKaguya, for references.
 	cd $RSUDIR
@@ -110,8 +105,7 @@ upload_to_tg() {
 	GIT_REPO_COMMIT_COUNT=$(cd .. && git rev-list --count HEAD)
 	GIT_CURRENT_BRANCH=$(cd .. && git rev-parse --abbrev-ref HEAD)
  
- 	if [[ $GIT_CI_RELEASE_TYPE = "release" ]]; then
-		release_text=$(cat <<EOF
+	release_text=$(cat <<EOF
 Scorpio Kernel v`echo $GIT_KERNEL_REVNUM` Release
 [$GIT_REPO_HASH](https://github.com/`echo $GIT_REPO`/commit/`echo $GIT_SHA`)
 
@@ -157,66 +151,16 @@ Bot by @RissuDesu
 [Source Code](https://github.com/rsuntk/android_kernel_samsung_a03)
 EOF
 )
-	elif [[ $GIT_CI_RELEASE_TYPE = "testing" ]]; then
-		release_text=$(cat <<EOF
-Scorpio CI-Kernel
-[$GIT_REPO_HASH](https://github.com/`echo $GIT_REPO`/commit/`echo $GIT_SHA`)
-
-*Build Date:* `date`
-*Kernel Version:* `echo $LINUX_VERSION`
-*Target:* Testing only
-
-*Branch:*
-\`\`\`
-`echo $GIT_CURRENT_BRANCH`
-\`\`\`
-
-*Commit msg:*
-\`\`\`
-`echo $GIT_COMMIT_MSG`
-\`\`\`
-
-*Notes:*
-- Untested, make sure to backup working boot.img before flash!
-
-*How to flash:*
-1. Unpack .lz4 archive,
-2. Reboot to TWRP,
-3. Select install, click Install Image,
-4. Flash this to boot partition,
-5. Reboot.
-
-*How to make it ODIN flashable (tarball file)*
-A. In Linux:
-1. Install required dependency: lz4
-2. Type this command:
-\`\`\`sh
-lz4 -d <Scorpio-CI-file>.lz4
-mv <Scorpio-CI-file>.img boot.img
-tar -cvf ScorpioCI.tar boot.img
-\`\`\`
-
-B. In Windows:
-1. Unpack .lz4 file with 7Zip-ZS or WinRAR
-2. Rename the .img file to boot.img
-3. Right click at the boot.img file
-4. Select 7zip ZS, click add to archive
-5. Select Archive format to tar, and set it to GNU (default)
-
-Bot by @RissuDesu
-
-[Source Code](https://github.com/rsuntk/a03)
-EOF
-)
-	fi
 
 	if [ ! -z $TG_BOT_TOKEN ]; then
-		echo ""
-		#curl -s -F "chat_id=-`echo $TG_CHAT_ID`" -F "document=@$FILE_NAME" -F parse_mode='Markdown' -F "caption=$release_text" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument"
+ 		echo "[i] Uploading to Telegram"
+		curl -s -F "chat_id=-`echo $TG_CHAT_ID`" -F "document=@$FILE_NAME" -F parse_mode='Markdown' -F "caption=$release_text" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument"
 	else
-		echo "! Telegram bot token empty. Abort kernel uploading";
+		echo "[!] Telegram bot token empty. Abort kernel uploading";
+  		NEED_TG_UPLOAD=false
 	fi
 }
+
 if [ -f $MK_SC ]; then
 	bash $MK_SC
 	rm $MK_SC
@@ -237,6 +181,11 @@ if [ -f $MK_SC ]; then
 		mk_bootimg;
 		if [[ $TG_UPLOAD = 'true' ]]; then
 			upload_to_tg;
+   			# if upload to tg fails, then abort it. (although it was handled on upload_to_tg function)
+      			if [[ $NEED_TG_UPLOAD = false ]]; then
+      				echo "[i] Bot token is empty, unable to upload. Please add your token to TG env as BOT_TOKEN."
+	  			exit 1;
+      			fi
 		fi
 	else
 		echo "Build failed, with $BUILD_STATE code."
